@@ -64,7 +64,6 @@ def detect_visibility(imgCls, input_dir, output_dir):
 
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         mean_intensity = np.mean(gray)
-        threshold = 80  
 
         if mean_intensity >= 81:
             label = "High"
