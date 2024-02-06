@@ -38,16 +38,20 @@ X=[]
 Z=[]
 IMG_SIZE=150
 
+TEST_SIZE=0.15
+
 #assuming dataset folder is in the same folder as this file
 noFire_DIR= rf"{DIR}\wildfire_detection_dataset\noFire" 
 Fire_DIR= rf"{DIR}\wildfire_detection_dataset\Fire"
 
+#new directory for fire and noFire
 output_DIR= rf"{DIR}\wildfire_detection_dataset\Output"
 
+#directory path will dynamically be added through loop
 noFire_New_DIR = ''
 Fire_New_DIR = ''
 
-def detect_day_night(imgCls, input_dir, output_dir):
+def detect_visibility(imgCls, input_dir, output_dir):
     global Fire_New_DIR
     global noFire_New_DIR
 
@@ -62,10 +66,12 @@ def detect_day_night(imgCls, input_dir, output_dir):
         mean_intensity = np.mean(gray)
         threshold = 80  
 
-        if mean_intensity > threshold:
-            label = "Day"
+        if mean_intensity >= 81:
+            label = "High"
+        elif mean_intensity >= 50 and mean_intensity <= 80:
+            label = "Moderate"
         else:
-            label = "Night"
+            label = "Low"
 
         output_label_dir = os.path.join(output_dir, imgCls, label)
         if not os.path.exists(output_label_dir):
@@ -79,40 +85,29 @@ def detect_day_night(imgCls, input_dir, output_dir):
     else:
         noFire_New_DIR = rf"{output_dir}\{imgCls}"
 
-def assign_label(img, imgCls):
-	return imgCls
+def make_train_data(imgCls, base_dir):
+    for folder_name in tqdm(os.listdir(base_dir)):
+        folder_path = os.path.join(base_dir, folder_name)
 
-def make_train_data(imgCls, DIR1, DIR2):
-    for DIR in [DIR1, DIR2]:
-        for img in tqdm(os.listdir(DIR)):
-            label= assign_label(img, imgCls)
-            path = os.path.join(DIR, img)
-            img = cv2.imread(path, cv2.IMREAD_COLOR)
-            img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+        for filename in os.listdir(folder_path):
+            if filename.endswith(('.jpg', '.jpeg', '.png', '.bmp')):  # Adjust extensions as needed
+                image_path = os.path.join(folder_path, filename)
 
-            X.append(np.array(img))
-            Z.append(str(label))
+                img = cv2.imread(image_path, cv2.IMREAD_COLOR)
+                img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
 
+                X.append(np.array(img))
+                Z.append(str(imgCls))
 
-detect_day_night('Fire', Fire_DIR, output_DIR)
+detect_visibility('Fire', Fire_DIR, output_DIR)
 
-detect_day_night('noFire', noFire_DIR, output_DIR)
+detect_visibility('noFire', noFire_DIR, output_DIR)
 
-
-print(Fire_New_DIR)
-print(noFire_New_DIR)
-
-noFire_Day_DIR = rf"{noFire_New_DIR}\Day"
-noFire_Night_DIR = rf"{noFire_New_DIR}\Night"
-Fire_Day_DIR = rf"{Fire_New_DIR}\Day"
-Fire_Night_DIR = rf"{Fire_New_DIR}\Night"
-
-make_train_data('Fire', Fire_Day_DIR, Fire_Night_DIR)
+make_train_data('Fire', Fire_New_DIR)
 print(len(X))
 
-make_train_data('noFire',noFire_Day_DIR, noFire_Night_DIR)
+make_train_data('noFire', noFire_New_DIR)
 print(len(X))
-
 
 lb=LabelBinarizer()
 Y=lb.fit_transform(Z)
@@ -120,17 +115,16 @@ Y=to_categorical(Y,2)
 X=np.array(X)
 X=X/255
 
-x_train, x_test, y_train, y_test = train_test_split(X, Y, test_size=0.25, random_state=42)
+x_train, x_test, y_train, y_test = train_test_split(X, Y, test_size=TEST_SIZE, random_state=42)
 print(len(x_train), len(x_test))
 
 np.random.seed(42)
-rn.seed(42) #usage?
+rn.seed(42)
 tf.random.set_seed(42)
 
 model = Sequential()
 model.add(Conv2D(filters = 32, kernel_size = (5,5),padding = 'Same',activation ='relu', input_shape = (150, 150, 3)))
 model.add(MaxPooling2D(pool_size=(2,2)))
-# conv2D is 2D i.e. Good for Images -;\bo Elteef
 model.add(Conv2D(filters = 64, kernel_size = (3,3),padding = 'Same',activation ='relu'))
 model.add(MaxPooling2D(pool_size=(2,2), strides=(2,2)))
 model.add(Conv2D(filters =96, kernel_size = (3,3),padding = 'Same',activation ='relu'))
@@ -146,7 +140,7 @@ batch_size = 16  # 32 #64 #128
 epochs=10
 
 from keras.callbacks import ReduceLROnPlateau
-red_lr= ReduceLROnPlateau(monitor='val_acc' ,patience=3,verbose=1,factor=0.1) #usage?
+red_lr= ReduceLROnPlateau(monitor='val_acc' ,patience=3,verbose=1,factor=0.1)
 
 datagen = ImageDataGenerator(
     featurewise_center=False, # set input mean toe over the dataset
@@ -176,6 +170,7 @@ plt.title('Model Loss')
 plt.ylabel('Loss')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
+plt.savefig(rf"{TEST_SIZE}_new_Model_Loss_.png")
 plt.show()
 
 plt.plot(History.history['accuracy'])
@@ -184,6 +179,7 @@ plt.title('Model accuracy')
 plt.ylabel('accuracy')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
+plt.savefig(rf"{TEST_SIZE}_new_Model_Accuracy_.png")
 plt.show()
 
 plt.plot(History.history['auc'])
@@ -192,6 +188,7 @@ plt.title('Model AUC')
 plt.ylabel('AUC')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
+plt.savefig(rf"{TEST_SIZE}_new_Model_AUC_.png")
 plt.show()
 
 # make predictions on the testing set
@@ -199,6 +196,14 @@ print("[INFO] evaluating network ... ")
 predidxs = model.predict(x_test, batch_size=batch_size)
 predidxs = np.argmax(predidxs, axis = 1)
 
+report = classification_report(y_test.argmax(axis = 1), predidxs, target_names = lb.classes_, output_dict=True)
+plt.figure(figsize=(6, 6))
+sns.heatmap(pd.DataFrame(report).transpose(), annot=True, cmap="YlGnBu", fmt='.2f', linewidths=.5)
+plt.title('Classification Report')
+plt.xlabel('Metrics')
+plt.ylabel('Classes')
+plt.savefig(rf"{TEST_SIZE}_new_Classification_Report.png")
+plt.show()
 print(classification_report(y_test.argmax(axis = 1), predidxs, target_names = lb.classes_))
 
 y_test=np.argmax(y_test, axis=1)
@@ -207,6 +212,7 @@ cm = confusion_matrix(y_test, predidxs , normalize='pred')
 print(cm)
 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels = lb.classes_)
 disp.plot()
+plt.savefig(rf"{TEST_SIZE}_new_Confusion_Matrix.png")
 plt.show()
 
 
@@ -222,7 +228,7 @@ plt.title("Training Loss and Accuracy")
 plt.xlabel("Epoch #")
 plt.ylabel("Loss/Accuracy")
 plt.legend(loc="lower left")
-plt.savefig("plot5.png")
+plt.savefig(rf"{TEST_SIZE}_new_Loss_and_Accuracy.png")
 plt.show()
 
 a=1
