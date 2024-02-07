@@ -36,27 +36,33 @@ from PIL import Image
 DIR = rf"{os.path.dirname(__file__)}"
 X=[]
 Z=[]
-IMG_SIZE=150
+IMG_SIZE = 150
 
-TEST_SIZE=0.15
+TEST_SIZE = 0.20
+
+batch_size = 16  # 32 #64 #128
+epochs = 200
+
+#evaluation results directory
+res_DIR = rf"{DIR}\Results" 
 
 #assuming dataset folder is in the same folder as this file
 noFire_DIR= rf"{DIR}\wildfire_detection_dataset\noFire" 
 Fire_DIR= rf"{DIR}\wildfire_detection_dataset\Fire"
 
 #new directory for fire and noFire
-output_DIR= rf"{DIR}\wildfire_detection_dataset\Output"
+visibility_output_DIR= rf"{DIR}\wildfire_detection_dataset\visibilityOutput"
 
 #directory path will dynamically be added through loop
 noFire_New_DIR = ''
 Fire_New_DIR = ''
 
-def detect_visibility(imgCls, input_dir, output_dir):
+def detect_visibility(imgCls, input_dir, visibility_output_DIR):
     global Fire_New_DIR
     global noFire_New_DIR
 
-    if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
+    if not os.path.exists(visibility_output_DIR):
+            os.makedirs(visibility_output_DIR)
 
     for img_name in tqdm(os.listdir(input_dir)):
         img_path = os.path.join(input_dir, img_name )
@@ -72,7 +78,7 @@ def detect_visibility(imgCls, input_dir, output_dir):
         else:
             label = "Low"
 
-        output_label_dir = os.path.join(output_dir, imgCls, label)
+        output_label_dir = os.path.join(visibility_output_DIR, imgCls, label)
         if not os.path.exists(output_label_dir):
             os.makedirs(output_label_dir)
 
@@ -80,9 +86,9 @@ def detect_visibility(imgCls, input_dir, output_dir):
         cv2.imwrite(output_path, img)
 
     if(imgCls == 'Fire'):
-        Fire_New_DIR = rf"{output_dir}\{imgCls}"
+        Fire_New_DIR = rf"{visibility_output_DIR}\{imgCls}"
     else:
-        noFire_New_DIR = rf"{output_dir}\{imgCls}"
+        noFire_New_DIR = rf"{visibility_output_DIR}\{imgCls}"
 
 def make_train_data(imgCls, base_dir):
     for folder_name in tqdm(os.listdir(base_dir)):
@@ -98,9 +104,9 @@ def make_train_data(imgCls, base_dir):
                 X.append(np.array(img))
                 Z.append(str(imgCls))
 
-detect_visibility('Fire', Fire_DIR, output_DIR)
+detect_visibility('Fire', Fire_DIR, visibility_output_DIR)
 
-detect_visibility('noFire', noFire_DIR, output_DIR)
+detect_visibility('noFire', noFire_DIR, visibility_output_DIR)
 
 make_train_data('Fire', Fire_New_DIR)
 print(len(X))
@@ -135,9 +141,6 @@ model.add(Dense(512))
 model.add(Activation('relu'))
 model.add(Dense(2, activation = "softmax"))
 
-batch_size = 16  # 32 #64 #128
-epochs=10
-
 from keras.callbacks import ReduceLROnPlateau
 red_lr= ReduceLROnPlateau(monitor='val_acc' ,patience=3,verbose=1,factor=0.1)
 
@@ -163,14 +166,19 @@ History = model.fit(datagen.flow(x_train, y_train, batch_size = batch_size),
     epochs = epochs, validation_data = (x_test,y_test),
     verbose = 1, steps_per_epoch = x_train.shape[0] // batch_size)
 
+if not os.path.exists(res_DIR):
+            os.makedirs(res_DIR)
+
+filename = rf"{res_DIR}/test_size_{TEST_SIZE}_epoch_{epochs}_batch_size_{batch_size}_visibility"
+
 plt.plot(History.history['loss'])
 plt.plot(History.history['val_loss'])
 plt.title('Model Loss')
 plt.ylabel('Loss')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
-plt.savefig(rf"{TEST_SIZE}_new_Model_Loss_.png")
-plt.show()
+plt.savefig(rf"{filename}_Model_Loss.png")
+#plt.show()
 
 plt.plot(History.history['accuracy'])
 plt.plot(History.history['val_accuracy'])
@@ -178,8 +186,8 @@ plt.title('Model accuracy')
 plt.ylabel('accuracy')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
-plt.savefig(rf"{TEST_SIZE}_new_Model_Accuracy_.png")
-plt.show()
+plt.savefig(rf"{filename}_Model_Accuracy.png")
+#plt.show()
 
 plt.plot(History.history['auc'])
 plt.plot(History.history['val_auc'])
@@ -187,8 +195,8 @@ plt.title('Model AUC')
 plt.ylabel('AUC')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
-plt.savefig(rf"{TEST_SIZE}_new_Model_AUC_.png")
-plt.show()
+plt.savefig(rf"{filename}_Model_AUC.png")
+# plt.show()
 
 # make predictions on the testing set
 print("[INFO] evaluating network ... ")
@@ -201,8 +209,8 @@ sns.heatmap(pd.DataFrame(report).transpose(), annot=True, cmap="YlGnBu", fmt='.2
 plt.title('Classification Report')
 plt.xlabel('Metrics')
 plt.ylabel('Classes')
-plt.savefig(rf"{TEST_SIZE}_new_Classification_Report.png")
-plt.show()
+plt.savefig(rf"{filename}_Classification_Report.png")
+# plt.show()
 print(classification_report(y_test.argmax(axis = 1), predidxs, target_names = lb.classes_))
 
 y_test=np.argmax(y_test, axis=1)
@@ -211,10 +219,8 @@ cm = confusion_matrix(y_test, predidxs , normalize='pred')
 print(cm)
 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels = lb.classes_)
 disp.plot()
-plt.savefig(rf"{TEST_SIZE}_new_Confusion_Matrix.png")
-plt.show()
-
-
+plt.savefig(rf"{filename}_Confusion_Matrix.png")
+# plt.show()
 
 N = epochs
 plt.style.use("ggplot")
@@ -227,7 +233,7 @@ plt.title("Training Loss and Accuracy")
 plt.xlabel("Epoch #")
 plt.ylabel("Loss/Accuracy")
 plt.legend(loc="lower left")
-plt.savefig(rf"{TEST_SIZE}_new_Loss_and_Accuracy.png")
-plt.show()
+plt.savefig(rf"{filename}_visibility_Loss_and_Accuracy.png")
+# plt.show()
 
 a=1
