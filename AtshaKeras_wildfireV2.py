@@ -20,6 +20,7 @@ from keras.utils import to_categorical
 from keras.layers import Dropout, Flatten,Activation
 from keras.layers import Conv2D, MaxPooling2D, BatchNormalization
 from keras.metrics import Precision
+from keras.callbacks import ReduceLROnPlateau
 
 import tensorflow as tf  # supports till python version 3.11.x, does not work on python 3.12 (10th January,2024) 
 import random as rn 
@@ -32,6 +33,7 @@ from random import shuffle
 from zipfile import ZipFile
 from PIL import Image
 
+tf.compat.v1.ragged.RaggedTensorValue
 
 DIR = rf"{os.path.dirname(__file__)}"
 X=[]
@@ -41,7 +43,7 @@ IMG_SIZE = 150
 TEST_SIZE = 0.20
 
 batch_size = 16  # 32 #64 #128
-epochs = 200
+epochs = 20
 
 #evaluation results directory
 res_DIR = rf"{DIR}\Results" 
@@ -57,6 +59,7 @@ visibility_output_DIR= rf"{DIR}\wildfire_detection_dataset\visibilityOutput"
 noFire_New_DIR = ''
 Fire_New_DIR = ''
 
+
 def detect_visibility(imgCls, input_dir, visibility_output_DIR):
     global Fire_New_DIR
     global noFire_New_DIR
@@ -67,16 +70,39 @@ def detect_visibility(imgCls, input_dir, visibility_output_DIR):
     for img_name in tqdm(os.listdir(input_dir)):
         img_path = os.path.join(input_dir, img_name )
         img = cv2.imread(img_path)
+       
+        # Convert the image to grayscale
+        gray_image = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        mean_intensity = np.mean(gray)
+        # Apply Gaussian blur to reduce noise
+        blurred_image = cv2.GaussianBlur(gray_image, (1, 1), 0)
 
-        if mean_intensity >= 81:
+        # Perform adaptive thresholding
+        binary_image = cv2.adaptiveThreshold(blurred_image, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 11, 2)
+
+        # Perform morphology operations to clean up the image
+        kernel = np.ones((1,1), np.uint8)
+        binary_image = cv2.morphologyEx(binary_image, cv2.MORPH_CLOSE, kernel)
+
+        # Calculate the total number of pixels
+        total_pixels = np.prod(binary_image.shape)
+
+        # Calculate the number of visible pixels
+        visible_pixels = np.count_nonzero(binary_image)
+
+        # Calculate the visibility ratio
+        visibility_ratio = visible_pixels  / total_pixels
+
+        if visibility_ratio  > 0.80 and visibility_ratio  <= 1:
+            label = "Very High"
+        elif visibility_ratio  > 0.60 and visibility_ratio  <= 0.80:
             label = "High"
-        elif mean_intensity >= 50 and mean_intensity <= 80:
+        elif visibility_ratio  > 0.40 and visibility_ratio  <= 0.60:
             label = "Moderate"
-        else:
+        elif visibility_ratio  > 0.20 and visibility_ratio  <= 0.40:
             label = "Low"
+        else:
+            label = "Very Low"
 
         output_label_dir = os.path.join(visibility_output_DIR, imgCls, label)
         if not os.path.exists(output_label_dir):
@@ -95,7 +121,7 @@ def make_train_data(imgCls, base_dir):
         folder_path = os.path.join(base_dir, folder_name)
 
         for filename in os.listdir(folder_path):
-            if filename.endswith(('.jpg', '.jpeg', '.png', '.bmp')):  # Adjust extensions as needed
+            if filename.endswith(('.jpg', '.jpeg', '.png', '.bmp')):
                 image_path = os.path.join(folder_path, filename)
 
                 img = cv2.imread(image_path, cv2.IMREAD_COLOR)
@@ -141,7 +167,7 @@ model.add(Dense(512))
 model.add(Activation('relu'))
 model.add(Dense(2, activation = "softmax"))
 
-from keras.callbacks import ReduceLROnPlateau
+
 red_lr= ReduceLROnPlateau(monitor='val_acc' ,patience=3,verbose=1,factor=0.1)
 
 datagen = ImageDataGenerator(
@@ -160,7 +186,6 @@ datagen = ImageDataGenerator(
 model.compile(optimizer=Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['AUC', 'accuracy'])  #Precision(thresholds=0), 
 
 model.summary()
-print(model.summary())
 
 History = model.fit(datagen.flow(x_train, y_train, batch_size = batch_size),
     epochs = epochs, validation_data = (x_test,y_test),
@@ -178,7 +203,7 @@ plt.ylabel('Loss')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
 plt.savefig(rf"{filename}_Model_Loss.png")
-#plt.show()
+plt.show()
 
 plt.plot(History.history['accuracy'])
 plt.plot(History.history['val_accuracy'])
@@ -187,7 +212,7 @@ plt.ylabel('accuracy')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
 plt.savefig(rf"{filename}_Model_Accuracy.png")
-#plt.show()
+plt.show()
 
 plt.plot(History.history['auc'])
 plt.plot(History.history['val_auc'])
@@ -196,7 +221,7 @@ plt.ylabel('AUC')
 plt.xlabel('Epochs')
 plt.legend([ 'train', 'test'])
 plt.savefig(rf"{filename}_Model_AUC.png")
-# plt.show()
+plt.show()
 
 # make predictions on the testing set
 print("[INFO] evaluating network ... ")
@@ -210,7 +235,7 @@ plt.title('Classification Report')
 plt.xlabel('Metrics')
 plt.ylabel('Classes')
 plt.savefig(rf"{filename}_Classification_Report.png")
-# plt.show()
+plt.show()
 print(classification_report(y_test.argmax(axis = 1), predidxs, target_names = lb.classes_))
 
 y_test=np.argmax(y_test, axis=1)
@@ -220,7 +245,7 @@ print(cm)
 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels = lb.classes_)
 disp.plot()
 plt.savefig(rf"{filename}_Confusion_Matrix.png")
-# plt.show()
+plt.show()
 
 N = epochs
 plt.style.use("ggplot")
@@ -234,6 +259,6 @@ plt.xlabel("Epoch #")
 plt.ylabel("Loss/Accuracy")
 plt.legend(loc="lower left")
 plt.savefig(rf"{filename}_visibility_Loss_and_Accuracy.png")
-# plt.show()
+plt.show()
 
 a=1
