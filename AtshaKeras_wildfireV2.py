@@ -38,6 +38,7 @@ tf.compat.v1.ragged.RaggedTensorValue
 DIR = rf"{os.path.dirname(__file__)}"
 X=[]
 Z=[]
+X_original = []  # To store the original images
 IMG_SIZE = 150
 
 TEST_SIZE = 0.20
@@ -116,6 +117,27 @@ def detect_visibility(imgCls, input_dir, visibility_output_DIR):
     else:
         noFire_New_DIR = rf"{visibility_output_DIR}\{imgCls}"
 
+def calculate_nwdi(image):
+    green = image[:, :, 1]
+    blue = image[:, :, 0]
+    nwdi = (green - blue) / (green + blue + 1e-10)  # Adding a small value to avoid division by zero
+    return nwdi
+
+def apply_nwdi_mask(image):
+    nwdi = calculate_nwdi(image)
+    
+    water_surface_mask = np.where((nwdi > 0.2) & (nwdi <= 1), 1, 0)
+    flooding_humidity_mask = np.where((nwdi > 0) & (nwdi <= 0.2), 1, 0)
+    moderate_drought_mask = np.where((nwdi > -0.3) & (nwdi <= 0), 1, 0)
+    drought_mask = np.where((nwdi >= -1) & (nwdi <= -0.3), 1, 0)
+
+    image[water_surface_mask == 1] = [0, 0, 0]  # Color water surfaces in blue
+    #image[flooding_humidity_mask == 1] = [0, 255, 0]  # Color flooding/humidity areas in green
+    #image[moderate_drought_mask == 1] = [0, 255, 255]  # Color moderate drought areas in yellow
+    #image[drought_mask == 1] = [255, 0, 0]  # Color drought areas in red
+    
+    return image
+
 def make_train_data(imgCls, base_dir):
     for folder_name in tqdm(os.listdir(base_dir)):
         folder_path = os.path.join(base_dir, folder_name)
@@ -127,12 +149,16 @@ def make_train_data(imgCls, base_dir):
                 img = cv2.imread(image_path, cv2.IMREAD_COLOR)
                 img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
 
+                X_original.append(np.array(img))  # Save the original image
+                img = apply_nwdi_mask(img)  # Apply NWDI mask
+
                 X.append(np.array(img))
                 Z.append(str(imgCls))
 
 detect_visibility('Fire', Fire_DIR, visibility_output_DIR)
 
 detect_visibility('noFire', noFire_DIR, visibility_output_DIR)
+
 
 make_train_data('Fire', Fire_New_DIR)
 print(len(X))
@@ -145,8 +171,11 @@ Y=lb.fit_transform(Z)
 Y=to_categorical(Y,2)
 X=np.array(X)
 X=X/255
+X_original = np.array(X_original)  # Convert original images list to numpy array
+X_original = X_original / 255  # Normalize original images
 
 x_train, x_test, y_train, y_test = train_test_split(X, Y, test_size=TEST_SIZE, random_state=42)
+x_train_orig, x_test_orig, _, _ = train_test_split(X_original, Y, test_size=TEST_SIZE, random_state=42)  # Split original images
 print(len(x_train), len(x_test))
 
 np.random.seed(42)
@@ -154,55 +183,53 @@ rn.seed(42)
 tf.random.set_seed(42)
 
 model = Sequential()
-model.add(Conv2D(filters = 32, kernel_size = (5,5),padding = 'Same',activation ='relu', input_shape = (150, 150, 3)))
-model.add(MaxPooling2D(pool_size=(2,2)))
-model.add(Conv2D(filters = 64, kernel_size = (3,3),padding = 'Same',activation ='relu'))
-model.add(MaxPooling2D(pool_size=(2,2), strides=(2,2)))
-model.add(Conv2D(filters =96, kernel_size = (3,3),padding = 'Same',activation ='relu'))
-model.add(MaxPooling2D(pool_size=(2,2), strides=(2,2)))
-model.add(Conv2D(filters = 96, kernel_size = (3,3),padding = 'Same',activation ='relu'))
-model.add(MaxPooling2D(pool_size=(2,2), strides=(2,2)))
+model.add(Conv2D(filters=32, kernel_size=(5, 5), padding='Same', activation='relu', input_shape=(IMG_SIZE, IMG_SIZE, 3)))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+model.add(Conv2D(filters=64, kernel_size=(3, 3), padding='Same', activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+model.add(Conv2D(filters=96, kernel_size=(3, 3), padding='Same', activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+model.add(Conv2D(filters=96, kernel_size=(3, 3), padding='Same', activation='relu'))
+model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
 model.add(Flatten())
 model.add(Dense(512))
 model.add(Activation('relu'))
-model.add(Dense(2, activation = "softmax"))
+model.add(Dense(2, activation="softmax"))
 
+batch_size = 16
+epochs = 10
 
-red_lr= ReduceLROnPlateau(monitor='val_acc' ,patience=3,verbose=1,factor=0.1)
+red_lr = ReduceLROnPlateau(monitor='val_accuracy', patience=3, verbose=1, factor=0.1)
 
 datagen = ImageDataGenerator(
-    featurewise_center=False, # set input mean toe over the dataset
-    samplewise_center=False, # set each sample mean toe
-    featurewise_std_normalization = False, # divide inputs by std of the dataset
-    samplewise_std_normalization=False, # divide each input by its std
-    zca_whitening=False, # apply ZCA whitening
-    rotation_range = 0.2, # randomly rotate images in the range (degrees, e to 180)
-    zoom_range = 0.1, # Randomly zoom image
-    width_shift_range=0.2, # randomly shift images horizontally (fraction of total width)
-    height_shift_range=0.2, # randomly shift images vertically (fraction of total height)
-    horizontal_flip=False, # randomly flip images
-    vertical_flip=True) # randomly flip images
+    rotation_range=20,
+    zoom_range=0.15,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.15,
+    horizontal_flip=True,
+    fill_mode="nearest"
+)
 
-model.compile(optimizer=Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['AUC', 'accuracy'])  #Precision(thresholds=0), 
+model.compile(optimizer=Adam(learning_rate=0.001), loss='categorical_crossentropy', metrics=['AUC', 'accuracy'])
 
 model.summary()
 
-History = model.fit(datagen.flow(x_train, y_train, batch_size = batch_size),
-    epochs = epochs, validation_data = (x_test,y_test),
-    verbose = 1, steps_per_epoch = x_train.shape[0] // batch_size)
+History = model.fit(
+    datagen.flow(x_train, y_train, batch_size=batch_size),
+    epochs=epochs, validation_data=(x_test, y_test),
+    verbose=1, steps_per_epoch=len(x_train) // batch_size, callbacks=[red_lr]
+)
 
-if not os.path.exists(res_DIR):
-            os.makedirs(res_DIR)
-
-filename = rf"{res_DIR}/test_size_{TEST_SIZE}_epoch_{epochs}_batch_size_{batch_size}_visibility"
+model.save('fire_detection_model.h5')
 
 plt.plot(History.history['loss'])
 plt.plot(History.history['val_loss'])
 plt.title('Model Loss')
 plt.ylabel('Loss')
 plt.xlabel('Epochs')
-plt.legend([ 'train', 'test'])
-plt.savefig(rf"{filename}_Model_Loss.png")
+plt.legend(['train', 'test'])
+plt.savefig("Model_Loss.png")
 plt.show()
 
 plt.plot(History.history['accuracy'])
@@ -210,8 +237,8 @@ plt.plot(History.history['val_accuracy'])
 plt.title('Model accuracy')
 plt.ylabel('accuracy')
 plt.xlabel('Epochs')
-plt.legend([ 'train', 'test'])
-plt.savefig(rf"{filename}_Model_Accuracy.png")
+plt.legend(['train', 'test'])
+plt.savefig("Model_Accuracy.png")
 plt.show()
 
 plt.plot(History.history['auc'])
@@ -219,32 +246,30 @@ plt.plot(History.history['val_auc'])
 plt.title('Model AUC')
 plt.ylabel('AUC')
 plt.xlabel('Epochs')
-plt.legend([ 'train', 'test'])
-plt.savefig(rf"{filename}_Model_AUC.png")
+plt.legend(['train', 'test'])
+plt.savefig("Model_AUC.png")
 plt.show()
 
-# make predictions on the testing set
 print("[INFO] evaluating network ... ")
 predidxs = model.predict(x_test, batch_size=batch_size)
-predidxs = np.argmax(predidxs, axis = 1)
+predidxs = np.argmax(predidxs, axis=1)
 
-report = classification_report(y_test.argmax(axis = 1), predidxs, target_names = lb.classes_, output_dict=True)
+report = classification_report(y_test.argmax(axis=1), predidxs, target_names=lb.classes_, output_dict=True)
 plt.figure(figsize=(6, 6))
 sns.heatmap(pd.DataFrame(report).transpose(), annot=True, cmap="YlGnBu", fmt='.2f', linewidths=.5)
 plt.title('Classification Report')
 plt.xlabel('Metrics')
 plt.ylabel('Classes')
-plt.savefig(rf"{filename}_Classification_Report.png")
+plt.savefig("Classification_Report.png")
 plt.show()
-print(classification_report(y_test.argmax(axis = 1), predidxs, target_names = lb.classes_))
+print(classification_report(y_test.argmax(axis=1), predidxs, target_names=lb.classes_))
 
-y_test=np.argmax(y_test, axis=1)
-#Create confusion matrix and normalizes it over predicted (columns)
-cm = confusion_matrix(y_test, predidxs , normalize='pred')
+y_test = np.argmax(y_test, axis=1)
+cm = confusion_matrix(y_test, predidxs, normalize='pred')
 print(cm)
-disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels = lb.classes_)
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=lb.classes_)
 disp.plot()
-plt.savefig(rf"{filename}_Confusion_Matrix.png")
+plt.savefig("Confusion_Matrix.png")
 plt.show()
 
 N = epochs
@@ -258,7 +283,16 @@ plt.title("Training Loss and Accuracy")
 plt.xlabel("Epoch #")
 plt.ylabel("Loss/Accuracy")
 plt.legend(loc="lower left")
-plt.savefig(rf"{filename}_visibility_Loss_and_Accuracy.png")
+plt.savefig("Loss_and_Accuracy.png")
 plt.show()
 
-a=1
+# Visualize some processed images with comparison to the original
+fig, axes = plt.subplots(nrows=2, ncols=min(len(x_test), 5), figsize=(15, 6))
+for i in range(min(len(x_test), 5)):
+    axes[0, i].imshow(x_test_orig[i])
+    axes[0, i].set_title("Original")
+    axes[0, i].axis('off')
+    axes[1, i].imshow(x_test[i])
+    axes[1, i].set_title("Processed")
+    axes[1, i].axis('off')
+plt.show()
